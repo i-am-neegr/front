@@ -1,36 +1,104 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Sudoku Multiplayer</title>
     <style>
-        body { font-family: Arial, sans-serif; background: #f0f0f0; text-align: center; padding: 10px; margin: 0; }
-        h2 { margin: 10px 0; }
-        select, button { padding: 10px; margin: 5px; font-size: 16px; }
-        #board { display: grid; grid-template-columns: repeat(9, 40px); gap: 1px; margin: 20px auto; max-width: 360px; }
-        .cell { width: 40px; height: 40px; font-size: 20px; text-align: center; border: 1px solid #ccc; background: white; }
-        .cell.filled { background: #eee; pointer-events: none; }
-        .cell.selected { border: 2px solid #007bff; }
-        .thick { border-width: 3px !important; }
-        #status { font-size: 18px; margin: 15px; color: #333; }
-        #pass { display: none; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+            padding: 16px;
+            text-align: center;
+            color: #333;
+        }
+        h1 {
+            margin: 12px 0 20px;
+            font-size: 1.8rem;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        select, button {
+            padding: 10px 18px;
+            font-size: 1rem;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            margin: 6px;
+            cursor: pointer;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+        }
+        button:disabled {
+            background: #aaa;
+            cursor: not-allowed;
+        }
+        #board {
+            display: grid;
+            grid-template-columns: repeat(9, 42px);
+            gap: 2px;
+            margin: 0 auto 24px;
+            max-width: 390px;
+            background: #000;
+            padding: 4px;
+            border-radius: 8px;
+        }
+        .cell {
+            width: 42px;
+            height: 42px;
+            font-size: 1.4rem;
+            text-align: center;
+            border: none;
+            background: white;
+            box-sizing: border-box;
+        }
+        .cell.filled {
+            background: #e9ecef;
+            color: #495057;
+            font-weight: bold;
+        }
+        .cell:focus {
+            outline: 2px solid #007bff;
+        }
+        /* жирные линии 3×3 */
+        .cell[data-row="2"], .cell[data-row="5"] { border-bottom: 3px solid #000 !important; }
+        .cell[data-col="2"], .cell[data-col="5"] { border-right: 3px solid #000 !important; }
+
+        #status {
+            font-size: 1.1rem;
+            margin: 16px 0;
+            min-height: 1.4em;
+        }
+        #share, #pass {
+            display: none;
+        }
     </style>
+
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
 </head>
 <body>
-<h2>Sudoku Multiplayer</h2>
-<select id="difficulty">
-    <option value="easy">Легко</option>
-    <option value="medium" selected>Средне</option>
-    <option value="hard">Сложно</option>
-</select>
-<button id="create">Создать игру</button>
-<button id="share" style="display:none;">Поделиться ссылкой</button>
-<div id="status">Ожидание...</div>
+<h1>Sudoku Multiplayer</h1>
+
+<div class="controls">
+    <select id="difficulty">
+        <option value="easy">Лёгкий</option>
+        <option value="medium" selected>Средний</option>
+        <option value="hard">Сложный</option>
+    </select>
+    <button id="create">Создать игру</button>
+    <button id="share">Поделиться</button>
+</div>
+
+<div id="status">Ожидание…</div>
+
 <div id="board"></div>
+
 <button id="pass">Пропустить ход</button>
 
 <script>
@@ -38,130 +106,154 @@
     tg.ready();
     tg.expand();
 
-    const userId = tg.initDataUnsafe.user?.id?.toString() || 'guest-' + Date.now();
-    const backend = 'https://sudoku-2ofn.onrender.com'; // ← Замени на свой домен (Postman-адрес)
+    const user = tg.initDataUnsafe.user || {};
+    const userId = user.id ? String(user.id) : 'guest-' + Date.now();
 
-    let socket = new SockJS(backend + '/ws');
-    let stompClient = Stomp.over(socket);
+    const backend = 'https://sudoku-2ofn.onrender.com';
+    const botUsername = 'sudoku52bot';
+
+    let stompClient = null;
     let sessionId = null;
-    let currentTurnIndex = 0;
     let players = [];
+    let currentTurn = 0;
 
-    // Авто-присоединение по startapp (из ссылки)
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('startapp')) {
-        sessionId = urlParams.get('startapp');
-        connectAndJoin();
+    // Автоприсоединение по параметру startapp
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('startapp')) {
+        sessionId = params.get('startapp');
+        connectWebSocket();
     }
 
-    function connectAndJoin() {
-        stompClient.connect({}, () => {
-            console.log('WebSocket connected');
+    function connectWebSocket() {
+        const socket = new SockJS(`${backend}/ws`);
+        stompClient = Stomp.over(socket);
 
-            // Подписки на обновления
-            stompClient.subscribe('/topic/' + sessionId + '/board', (msg) => {
+        stompClient.connect({}, function () {
+            console.log('WebSocket подключён');
+
+            stompClient.subscribe(`/topic/${sessionId}/board`, msg => {
                 const data = JSON.parse(msg.body);
                 renderBoard(data.board);
-                currentTurnIndex = data.currentTurnIndex;
+                currentTurn = data.currentTurn;
                 updateStatus();
             });
 
-            stompClient.subscribe('/topic/' + sessionId + '/players', (msg) => {
+            stompClient.subscribe(`/topic/${sessionId}/players`, msg => {
                 const data = JSON.parse(msg.body);
-                players = data.players;
+                players = data.players || [];
                 updateStatus();
             });
 
-            stompClient.subscribe('/topic/' + sessionId + '/finish', (msg) => {
+            stompClient.subscribe(`/topic/${sessionId}/finish`, msg => {
                 const data = JSON.parse(msg.body);
                 document.getElementById('status').textContent = data.message || 'Игра завершена!';
                 document.getElementById('pass').style.display = 'none';
             });
 
-            // Присоединяемся
+            // присоединяемся
             stompClient.send('/app/join', {}, JSON.stringify({ sessionId, userId }));
+        }, function (error) {
+            console.error('WebSocket ошибка:', error);
+            setTimeout(connectWebSocket, 3000);
         });
     }
 
-    // Создать новую игру (через REST)
-    document.getElementById('create').addEventListener('click', () => {
+    // Создать игру
+    document.getElementById('create').onclick = () => {
         const difficulty = document.getElementById('difficulty').value;
-        fetch(`${backend}/test/create-session?difficulty=${difficulty}&userId=${userId}`, {
-            method: 'POST'
+
+        fetch(`${backend}/api/sudoku/create?difficulty=${difficulty}&userId=${userId}`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' }
         })
-            .then(res => res.json())
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            })
             .then(data => {
                 sessionId = data.sessionId;
-                renderBoard(data.board); // board из ответа
+                renderBoard(data.board);
                 document.getElementById('share').style.display = 'inline-block';
                 document.getElementById('pass').style.display = 'inline-block';
                 updateStatus();
-                connectAndJoin(); // подключаемся к WebSocket
+                connectWebSocket();
             })
-            .catch(err => alert('Ошибка создания: ' + err));
-    });
+            .catch(err => {
+                console.error(err);
+                alert('Не удалось создать игру\n' + err.message);
+            });
+    };
 
     // Поделиться
-    document.getElementById('share').addEventListener('click', () => {
-        const link = `https://t.me/sudoku52bot/app?startapp=${sessionId}`;
+    document.getElementById('share').onclick = () => {
+        const link = `https://t.me/${botUsername}/app?startapp=${sessionId}`;
         tg.openTelegramLink(link);
-    });
+    };
 
     // Пропустить ход
-    document.getElementById('pass').addEventListener('click', () => {
+    document.getElementById('pass').onclick = () => {
         if (isMyTurn()) {
             stompClient.send('/app/pass', {}, JSON.stringify({ sessionId, userId }));
         }
-    });
+    };
 
     function renderBoard(board) {
-        const boardDiv = document.getElementById('board');
-        boardDiv.innerHTML = '';
-        for (let row = 0; row < 9; row++) {
-            for (let col = 0; col < 9; col++) {
-                const cell = document.createElement('input');
-                cell.className = 'cell';
-                cell.type = 'number';
-                cell.min = 1; cell.max = 9;
-                cell.value = board[row][col] || '';
-                cell.dataset.row = row;
-                cell.dataset.col = col;
+        const container = document.getElementById('board');
+        container.innerHTML = '';
 
-                if (board[row][col] !== 0) {
-                    cell.classList.add('filled');
+        for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 9; c++) {
+                const input = document.createElement('input');
+                input.type = 'tel'; // лучше для мобильных
+                input.className = 'cell';
+                input.dataset.row = r;
+                input.dataset.col = c;
+                input.value = board[r][c] || '';
+
+                if (board[r][c] !== 0) {
+                    input.classList.add('filled');
+                    input.readOnly = true;
                 } else {
-                    cell.addEventListener('input', (e) => {
-                        const num = parseInt(e.target.value);
-                        if (num >= 1 && num <= 9 && isMyTurn()) {
-                            stompClient.send('/app/move', {}, JSON.stringify({
-                                sessionId, userId, row, col, value: num
-                            }));
+                    input.maxLength = 1;
+                    input.addEventListener('input', e => {
+                        const v = e.target.value;
+                        if (v && isMyTurn()) {
+                            const num = parseInt(v, 10);
+                            if (num >= 1 && num <= 9) {
+                                stompClient.send('/app/move', {}, JSON.stringify({
+                                    sessionId,
+                                    userId,
+                                    row: r,
+                                    col: c,
+                                    value: num
+                                }));
+                            }
+                            e.target.value = ''; // очищаем после отправки
                         }
                     });
                 }
 
-                // Толстые линии для 3×3
-                if (row % 3 === 0) cell.style.borderTop = '3px solid #333';
-                if (col % 3 === 0) cell.style.borderLeft = '3px solid #333';
-                if (row === 8) cell.style.borderBottom = '3px solid #333';
-                if (col === 8) cell.style.borderRight = '3px solid #333';
-
-                boardDiv.appendChild(cell);
+                container.appendChild(input);
             }
         }
     }
 
     function updateStatus() {
-        const myIndex = players.indexOf(userId);
-        const isMy = myIndex === currentTurnIndex;
-        document.getElementById('status').textContent =
-            `Игроков: ${players.length} | Ход: ${isMy ? 'ВАШ' : 'другого'}`;
+        const idx = players.indexOf(userId);
+        const isMy = idx >= 0 && idx === currentTurn;
+        const text = players.length === 0
+            ? 'Ожидание игроков…'
+            : `Игроков: ${players.length} • Ход ${isMy ? 'ваш' : 'другого'}`;
+        document.getElementById('status').textContent = text;
         document.getElementById('pass').disabled = !isMy;
     }
 
     function isMyTurn() {
-        return players.indexOf(userId) === currentTurnIndex;
+        return players.indexOf(userId) === currentTurn;
     }
+
+    // начальный статус
+    updateStatus();
 </script>
 </body>
 </html>
