@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudoku Multiplayer</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f0f0; text-align: center; padding: 10px; margin: 0; }
+        h2 { margin: 10px 0; }
+        select, button { padding: 10px; margin: 5px; font-size: 16px; }
+        #board { display: grid; grid-template-columns: repeat(9, 40px); gap: 1px; margin: 20px auto; max-width: 360px; }
+        .cell { width: 40px; height: 40px; font-size: 20px; text-align: center; border: 1px solid #ccc; background: white; }
+        .cell.filled { background: #eee; pointer-events: none; }
+        .cell.selected { border: 2px solid #007bff; }
+        .thick { border-width: 3px !important; }
+        #status { font-size: 18px; margin: 15px; color: #333; }
+        #pass { display: none; }
+    </style>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+<body>
+<h2>Sudoku Multiplayer</h2>
+<select id="difficulty">
+    <option value="easy">Легко</option>
+    <option value="medium" selected>Средне</option>
+    <option value="hard">Сложно</option>
+</select>
+<button id="create">Создать игру</button>
+<button id="share" style="display:none;">Поделиться ссылкой</button>
+<div id="status">Ожидание...</div>
+<div id="board"></div>
+<button id="pass">Пропустить ход</button>
+
+<script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    const userId = tg.initDataUnsafe.user?.id?.toString() || 'guest-' + Date.now();
+    const backend = 'https://sudoku-2ofn.onrender.com'; // ← Замени на свой домен (Postman-адрес)
+
+    let socket = new SockJS(backend + '/ws');
+    let stompClient = Stomp.over(socket);
+    let sessionId = null;
+    let currentTurnIndex = 0;
+    let players = [];
+
+    // Авто-присоединение по startapp (из ссылки)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('startapp')) {
+        sessionId = urlParams.get('startapp');
+        connectAndJoin();
+    }
+
+    function connectAndJoin() {
+        stompClient.connect({}, () => {
+            console.log('WebSocket connected');
+
+            // Подписки на обновления
+            stompClient.subscribe('/topic/' + sessionId + '/board', (msg) => {
+                const data = JSON.parse(msg.body);
+                renderBoard(data.board);
+                currentTurnIndex = data.currentTurnIndex;
+                updateStatus();
+            });
+
+            stompClient.subscribe('/topic/' + sessionId + '/players', (msg) => {
+                const data = JSON.parse(msg.body);
+                players = data.players;
+                updateStatus();
+            });
+
+            stompClient.subscribe('/topic/' + sessionId + '/finish', (msg) => {
+                const data = JSON.parse(msg.body);
+                document.getElementById('status').textContent = data.message || 'Игра завершена!';
+                document.getElementById('pass').style.display = 'none';
+            });
+
+            // Присоединяемся
+            stompClient.send('/app/join', {}, JSON.stringify({ sessionId, userId }));
+        });
+    }
+
+    // Создать новую игру (через REST)
+    document.getElementById('create').addEventListener('click', () => {
+        const difficulty = document.getElementById('difficulty').value;
+        fetch(`${backend}/test/create-session?difficulty=${difficulty}&userId=${userId}`, {
+            method: 'POST'
+        })
+            .then(res => res.json())
+            .then(data => {
+                sessionId = data.sessionId;
+                renderBoard(data.board); // board из ответа
+                document.getElementById('share').style.display = 'inline-block';
+                document.getElementById('pass').style.display = 'inline-block';
+                updateStatus();
+                connectAndJoin(); // подключаемся к WebSocket
+            })
+            .catch(err => alert('Ошибка создания: ' + err));
+    });
+
+    // Поделиться
+    document.getElementById('share').addEventListener('click', () => {
+        const link = `https://t.me/sudoku52bot/app?startapp=${sessionId}`;
+        tg.openTelegramLink(link);
+    });
+
+    // Пропустить ход
+    document.getElementById('pass').addEventListener('click', () => {
+        if (isMyTurn()) {
+            stompClient.send('/app/pass', {}, JSON.stringify({ sessionId, userId }));
+        }
+    });
+
+    function renderBoard(board) {
+        const boardDiv = document.getElementById('board');
+        boardDiv.innerHTML = '';
+        for (let row = 0; row < 9; row++) {
+            for (let col = 0; col < 9; col++) {
+                const cell = document.createElement('input');
+                cell.className = 'cell';
+                cell.type = 'number';
+                cell.min = 1; cell.max = 9;
+                cell.value = board[row][col] || '';
+                cell.dataset.row = row;
+                cell.dataset.col = col;
+
+                if (board[row][col] !== 0) {
+                    cell.classList.add('filled');
+                } else {
+                    cell.addEventListener('input', (e) => {
+                        const num = parseInt(e.target.value);
+                        if (num >= 1 && num <= 9 && isMyTurn()) {
+                            stompClient.send('/app/move', {}, JSON.stringify({
+                                sessionId, userId, row, col, value: num
+                            }));
+                        }
+                    });
+                }
+
+                // Толстые линии для 3×3
+                if (row % 3 === 0) cell.style.borderTop = '3px solid #333';
+                if (col % 3 === 0) cell.style.borderLeft = '3px solid #333';
+                if (row === 8) cell.style.borderBottom = '3px solid #333';
+                if (col === 8) cell.style.borderRight = '3px solid #333';
+
+                boardDiv.appendChild(cell);
+            }
+        }
+    }
+
+    function updateStatus() {
+        const myIndex = players.indexOf(userId);
+        const isMy = myIndex === currentTurnIndex;
+        document.getElementById('status').textContent =
+            `Игроков: ${players.length} | Ход: ${isMy ? 'ВАШ' : 'другого'}`;
+        document.getElementById('pass').disabled = !isMy;
+    }
+
+    function isMyTurn() {
+        return players.indexOf(userId) === currentTurnIndex;
+    }
+</script>
+</body>
+</html>
