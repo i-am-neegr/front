@@ -3,17 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Sudoku Multiplayer</title>
+    <title>Sudoku Telegram</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
     <style>
         :root {
             --bg: #f8f9fa;
-            --cell-bg: #ffffff;
-            --filled-bg: #e9ecef;
+            --cell: #fff;
+            --filled: #e9ecef;
             --border: #dee2e6;
-            --thick-border: #495057;
+            --thick: #495057;
             --accent: #0d6efd;
-            --success: #198754;
             --error: #dc3545;
             --text: #212529;
         }
@@ -21,7 +22,7 @@
         body {
             margin: 0;
             padding: 16px;
-            font-family: system-ui, -apple-system, sans-serif;
+            font-family: system-ui, sans-serif;
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
@@ -30,11 +31,7 @@
             align-items: center;
         }
 
-        h2 {
-            margin: 0 0 16px;
-            font-size: 1.6rem;
-            color: var(--text);
-        }
+        h2 { margin: 8px 0 16px; font-size: 1.5rem; }
 
         .controls {
             display: flex;
@@ -51,7 +48,6 @@
             border: 1px solid var(--border);
             background: white;
             cursor: pointer;
-            transition: all 0.15s;
         }
 
         button {
@@ -60,15 +56,7 @@
             border: none;
         }
 
-        button:hover:not(:disabled) {
-            background: #0b5ed7;
-            transform: translateY(-1px);
-        }
-
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
+        button:hover:not(:disabled) { background: #0a58ca; }
 
         #status {
             font-size: 1.1rem;
@@ -77,60 +65,59 @@
             min-height: 1.4em;
         }
 
-        #players {
+        #players-list {
             font-size: 0.95rem;
             color: #6c757d;
-            margin-bottom: 12px;
+            margin: 8px 0 16px;
         }
 
         #board {
             display: grid;
             grid-template-columns: repeat(9, 1fr);
             gap: 2px;
-            max-width: 100%;
             width: 360px;
-            background: var(--thick-border);
+            max-width: 100%;
+            background: var(--thick);
             padding: 2px;
             border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
         }
 
         .cell {
             aspect-ratio: 1;
-            background: var(--cell-bg);
+            background: var(--cell);
             border: 1px solid var(--border);
-            font-size: 1.4rem;
-            text-align: center;
+            font-size: 1.35rem;
             font-weight: bold;
+            text-align: center;
             color: var(--accent);
-            transition: background 0.2s;
         }
 
         .cell.filled {
-            background: var(--filled-bg);
+            background: var(--filled);
             color: #495057;
             pointer-events: none;
         }
 
         .cell.error {
             background: #ffebee;
-            animation: shake 0.4s;
+            animation: shake 0.35s;
         }
 
         @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-4px); }
-            75% { transform: translateX(4px); }
+            0%,100% { transform: translateX(0); }
+            20%,80% { transform: translateX(-3px); }
+            40%,60% { transform: translateX(3px); }
         }
 
-        /* Толстые линии для 3×3 блоков */
-        .cell[data-row="0"], .cell[data-row="3"], .cell[data-row="6"] { border-top: 3px solid var(--thick-border); }
-        .cell[data-col="0"], .cell[data-col="3"], .cell[data-col="6"] { border-left: 3px solid var(--thick-border); }
-        .cell[data-row="8"] { border-bottom: 3px solid var(--thick-border); }
-        .cell[data-col="8"] { border-right: 3px solid var(--thick-border); }
+        /* 3×3 блоки */
+        .cell[data-row="0"], .cell[data-row="3"], .cell[data-row="6"] { border-top: 3px solid var(--thick); }
+        .cell[data-col="0"], .cell[data-col="3"], .cell[data-col="6"] { border-left: 3px solid var(--thick); }
+        .cell[data-row="8"] { border-bottom: 3px solid var(--thick); }
+        .cell[data-col="8"] { border-right: 3px solid var(--thick); }
 
         @media (max-width: 400px) {
-            #board { width: 100%; max-width: none; gap: 1px; }
+            #board { width: 100%; gap: 1px; }
             .cell { font-size: 1.1rem; }
         }
     </style>
@@ -145,110 +132,157 @@
         <option value="medium" selected>Средний</option>
         <option value="hard">Сложный</option>
     </select>
-    <button id="createBtn">Новая игра</button>
-    <button id="shareBtn" style="display:none;">Поделиться</button>
+    <button id="create">Создать</button>
+    <button id="share" style="display:none;">Поделиться</button>
 </div>
 
-<div id="status">Загрузка...</div>
-<div id="players"></div>
-
+<div id="status">Загрузка…</div>
+<div id="players-list"></div>
 <div id="board"></div>
-
-<button id="passBtn" style="display:none; margin-top:16px;">Пропустить ход</button>
+<button id="pass" style="display:none; margin-top:16px;">Пропустить ход</button>
 
 <script>
     const tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
 
-    const backend = 'https://sudoku-2ofn.onrender.com'; // ← замени
-    const botUsername = 'sudoku52bot'; // ← замени на username бота без @
+    const WS_URL = 'https://sudoku-2ofn.onrender.com';               // ← твой домен
+    const BOT_USERNAME = 'sudoku52bot';                  // ← без @
+    const REST_BASE = 'https://sudoku-2ofn.onrender.com/api/sudoku';    // ← твой домен
 
     const user = tg.initDataUnsafe.user || {};
-    const userId = user.id?.toString() || ('guest_' + Date.now());
+    const userId = user.id?.toString() || 'guest_'+Date.now();
     const userName = user.username || user.first_name || 'Игрок';
-    const initData = tg.initData;
+    const initDataRaw = tg.initData;
 
     let sessionId = null;
+    let stompClient = null;
     let polling = null;
 
-    // Получаем sessionId из startapp, если есть
-    const params = new URLSearchParams(location.search);
-    if (params.has('startapp')) {
-        sessionId = params.get('startapp');
-        joinGame();
+    // Автоприсоединение по startapp
+    const urlParams = new URLSearchParams(location.search);
+    if (urlParams.has('startapp')) {
+        sessionId = urlParams.get('startapp');
+        connectWebSocket(() => joinSession());
     }
 
-    // ─── События ────────────────────────────────────────
+    // ─── WebSocket ───────────────────────────────────────
 
-    document.getElementById('createBtn').onclick = async () => {
+    function connectWebSocket(callback) {
+        const socket = new SockJS(WS_URL);
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, () => {
+            console.log('WS connected');
+
+            // Приватные подписки
+            stompClient.subscribe('/user/topic/session', msg => {
+                const data = JSON.parse(msg.body);
+                sessionId = data.sessionId;
+                updateUI(data);
+                showControls();
+                startPolling(); // на всякий случай
+            });
+
+            // Общие обновления сессии
+            if (sessionId) {
+                stompClient.subscribe('/topic/' + sessionId + '/players', msg => {
+                    const data = JSON.parse(msg.body);
+                    renderPlayers(data.players);
+                    updateStatus();
+                });
+
+                stompClient.subscribe('/topic/' + sessionId + '/board', msg => {
+                    const data = JSON.parse(msg.body);
+                    renderBoard(data.board);
+                    updateStatusFromIndex(data.currentTurnIndex);
+                });
+
+                stompClient.subscribe('/topic/' + sessionId + '/turn', msg => {
+                    const data = JSON.parse(msg.body);
+                    updateStatusFromIndex(data.currentTurnIndex);
+                });
+
+                stompClient.subscribe('/topic/' + sessionId + '/finish', msg => {
+                    const data = JSON.parse(msg.body);
+                    document.getElementById('status').textContent = data.message || 'Игра завершена!';
+                    tg.showAlert(data.message || 'Судоку решено!');
+                });
+            }
+
+            if (callback) callback();
+        }, err => {
+            console.error('WS error', err);
+            tg.showPopup({message: 'Ошибка соединения'});
+        });
+    }
+
+    // ─── Действия ───────────────────────────────────────
+
+    document.getElementById('create').onclick = () => {
         const diff = document.getElementById('difficulty').value;
-        try {
-            const res = await fetchWithAuth(`${backend}/create?difficulty=${diff}`);
-            const data = await res.json();
-            sessionId = data.sessionId;
-            updateUI(data);
-            startPolling();
-            showShareAndPass();
-        } catch (err) {
-            tg.showPopup({title: "Ошибка", message: err.message || "Не удалось создать игру"});
-        }
-    };
-
-    document.getElementById('shareBtn').onclick = () => {
-        const link = `https://t.me/${botUsername}/app?startapp=${sessionId}`;
-        navigator.clipboard.writeText(link).then(() => {
-            tg.showPopup({message: "Ссылка скопирована в буфер обмена"});
-        }).catch(() => {
-            tg.showPopup({message: "Ссылка:\n" + link});
+        connectWebSocket(() => {
+            stompClient.send('/app/create', {}, JSON.stringify({
+                difficulty: diff,
+                userId,
+                name: userName
+            }));
         });
     };
 
-    document.getElementById('passBtn').onclick = async () => {
-        if (!isMyTurn()) return tg.showPopup({message: "Не ваш ход"});
-        try {
-            const res = await fetchWithAuth(`${backend}/${sessionId}/pass`);
-            const data = await res.json();
-            if (data.success) updateStatus();
-        } catch (err) {
-            tg.showPopup({message: "Не удалось пропустить ход"});
-        }
+    function joinSession() {
+        connectWebSocket(() => {
+            stompClient.send('/app/join', {}, JSON.stringify({
+                sessionId,
+                userId,
+                name: userName
+            }));
+        });
+    }
+
+    document.getElementById('share').onclick = () => {
+        const link = `https://t.me/${BOT_USERNAME}/app?startapp=${sessionId}`;
+        navigator.clipboard.writeText(link).then(() => {
+            tg.showPopup({message: 'Ссылка скопирована'});
+        }).catch(() => {
+            tg.showPopup({message: link});
+        });
     };
 
-    // ─── Функции ────────────────────────────────────────
+    document.getElementById('pass').onclick = () => {
+        if (!stompClient) return;
+        stompClient.send('/app/pass', {}, JSON.stringify({ sessionId, userId }));
+    };
 
-    async function joinGame() {
-        try {
-            const res = await fetchWithAuth(`${backend}/join/${sessionId}`);
-            const data = await res.json();
-            updateUI(data);
-            startPolling();
-            showShareAndPass();
-        } catch (err) {
-            tg.showPopup({title: "Ошибка", message: "Игра не найдена или недоступна"});
-        }
-    }
+    // ─── Polling как запасной вариант ───────────────────
 
     function startPolling() {
         if (polling) clearInterval(polling);
         polling = setInterval(async () => {
+            if (!sessionId) return;
             try {
-                const res = await fetchWithAuth(`${backend}/${sessionId}`);
+                const url = `${REST_BASE}/${sessionId}?initData=${encodeURIComponent(initDataRaw)}`;
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('poll failed');
                 const data = await res.json();
-                updateUI(data);
+                renderBoard(data.board);
+                renderPlayers(data.players);
+                updateStatusFromIndex(data.currentTurnIndex);
                 if (data.finished) {
                     clearInterval(polling);
-                    tg.showAlert("Игра завершена! Судоку решено.");
+                    tg.showAlert('Игра завершена!');
                 }
             } catch {}
-        }, 2500);
+        }, 4000);
     }
 
+    // ─── UI обновления ──────────────────────────────────
+
     function updateUI(data) {
+        sessionId = data.sessionId;
         renderBoard(data.board);
         renderPlayers(data.players);
-        updateStatus(data.currentTurnIndex, data.players);
-        if (data.finished) document.getElementById('status').textContent = "✅ Судоку решено!";
+        updateStatusFromIndex(data.currentTurnIndex);
     }
 
     function renderBoard(board) {
@@ -257,9 +291,7 @@
         board.forEach((row, r) => {
             row.forEach((val, c) => {
                 const input = document.createElement('input');
-                input.type = 'tel'; // лучше для мобильных
-                input.inputMode = 'numeric';
-                input.pattern = '[1-9]';
+                input.type = 'tel';
                 input.className = 'cell';
                 input.value = val || '';
                 input.dataset.row = r;
@@ -269,7 +301,7 @@
                     input.classList.add('filled');
                     input.disabled = true;
                 } else {
-                    input.oninput = handleCellInput;
+                    input.oninput = e => handleInput(e, r, c);
                 }
 
                 container.appendChild(input);
@@ -277,76 +309,47 @@
         });
     }
 
-    async function handleCellInput(e) {
-        const val = e.target.value.trim();
-        if (!/[1-9]/.test(val)) {
+    async function handleInput(e, row, col) {
+        const v = e.target.value.trim();
+        if (!/[1-9]/.test(v)) {
             e.target.value = '';
             return;
         }
-        if (!isMyTurn()) {
+
+        if (!stompClient?.connected) {
             e.target.value = '';
-            tg.showPopup({message: "Не ваш ход"});
             return;
         }
 
-        const r = +e.target.dataset.row;
-        const c = +e.target.dataset.col;
-        const num = +val;
+        const num = +v;
 
-        try {
-            const res = await fetchWithAuth(`${backend}/${sessionId}/move?row=${r}&col=${c}&value=${num}`);
-            const data = await res.json();
-            if (data.success) {
-                renderBoard(data.board);
-                updateStatus(data.currentTurnIndex, data.players);
-                if (data.finished) {
-                    tg.showAlert("Поздравляем! Судоку решено!");
-                }
-            } else {
-                e.target.classList.add('error');
-                setTimeout(() => e.target.classList.remove('error'), 600);
-                e.target.value = '';
-            }
-        } catch {
-            e.target.value = '';
-        }
+        stompClient.send('/app/move', {}, JSON.stringify({
+            sessionId,
+            userId,
+            row,
+            col,
+            value: num
+        }));
+
+        // Очистим поле сразу — бэкенд подтвердит ход
+        e.target.value = '';
     }
 
     function renderPlayers(players = []) {
-        document.getElementById('players').textContent =
+        document.getElementById('players-list').textContent =
             players.length ? `Игроки: ${players.map(p => p.name).join(', ')}` : '';
     }
 
-    function updateStatus(turnIndex, players = []) {
-        const myIndex = players.findIndex(p => p.id === userId);
-        const isSingle = players.length <= 1;
-        const isMy = isSingle || myIndex === turnIndex;
-
-        let text = isSingle ? "Одиночная игра — ваш ход" : `Ход: ${players[turnIndex]?.name || '?'}`;
-        if (!isMy) text += " (ожидание)";
-        document.getElementById('status').textContent = text;
+    function updateStatusFromIndex(idx) {
+        if (!sessionId) return;
+        // Точный статус лучше получать через polling или доп. сообщение
+        // Здесь упрощённо
+        document.getElementById('status').textContent = `Ход игрока #${idx + 1}`;
     }
 
-    function isMyTurn() {
-        // Логика уже внутри updateStatus, но для кнопки pass
-        return true; // в одиночном режиме всегда true, в мульти — проверяется на бэкенде
-    }
-
-    function showShareAndPass() {
-        document.getElementById('shareBtn').style.display = 'inline-block';
-        // Pass показываем только если мультиплеер (но бэкенд сам отклонит в одиночном)
-        document.getElementById('passBtn').style.display = 'inline-block';
-    }
-
-    async function fetchWithAuth(url) {
-        const fullUrl = url + (url.includes('?') ? '&' : '?') +
-            `userId=${userId}&name=${encodeURIComponent(userName)}&initData=${encodeURIComponent(initData)}`;
-        const res = await fetch(fullUrl, { method: url.includes('/move') || url.includes('/pass') ? 'POST' : 'GET' });
-        if (!res.ok) {
-            const errText = await res.text();
-            throw new Error(errText || `HTTP ${res.status}`);
-        }
-        return res;
+    function showControls() {
+        document.getElementById('share').style.display = 'inline-block';
+        document.getElementById('pass').style.display = 'inline-block';
     }
 </script>
 </body>
