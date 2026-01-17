@@ -234,24 +234,47 @@
         });
     };
 
-    function join() {
-        connectWS(() => {
-            stompClient.send('/app/join', {}, JSON.stringify({
-                sessionId,
-                userId,
-                name: userName
-            }));
-        });
-    }
+    // Поделиться — копируем ссылку в буфер + уведомление
+    document.getElementById('share').onclick = async () => {
+        if (!sessionId) {
+            alert("Сначала создайте игру!");
+            return;
+        }
 
-    document.getElementById('share').onclick = () => {
-        const link = `https://t.me/${BOT_USERNAME}/app?startapp=${sessionId}`;
-        navigator.clipboard.writeText(link).then(() => {
-            tg.showPopup({ message: 'Ссылка скопирована в буфер' });
-        }).catch(() => {
-            tg.showPopup({ message: link });
-        });
-    };
+        const botUsername = 'sudoku52bot'; // или вынеси в константу наверху
+        const shareLink = `https://t.me/${botUsername}?startapp=${sessionId}`;
+        // Альтернатива (иногда лучше работает): `https://t.me/${botUsername}/app?startapp=${sessionId}`
+
+        try {
+            await navigator.clipboard.writeText(shareLink);
+
+            // Меняем текст кнопки на 2–3 секунды (визуальная обратная связь)
+            const btn = document.getElementById('share');
+            const originalText = btn.textContent;
+            btn.textContent = "Ссылка скопирована ✓";
+            btn.style.background = '#28a745'; // зелёный акцент
+
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.style.background = ''; // возвращаем оригинальный цвет
+            }, 2200);
+
+            // Опционально: можно сразу предложить открыть бота/чат
+            // tg.openLink(shareLink);   // ← раскомментируй, если хочешь оба действия
+
+            // Или показать более красивое уведомление через Telegram API (если нужно)
+            // tg.showPopup({ title: "Готово!", message: "Ссылка скопирована\nВставь её другу", buttons: [{type:"ok"}] });
+
+        } catch (err) {
+            console.error('Не удалось скопировать:', err);
+
+            // Запасной вариант — показываем ссылку пользователю
+            alert(`Не удалось скопировать автоматически.\n\nСкопируй вручную:\n${shareLink}`);
+
+            // Или открываем ссылку, чтобы пользователь мог long-press → копировать
+            tg.openLink(shareLink);
+        }
+    };;
 
     document.getElementById('pass').onclick = () => {
         if (stompClient?.connected) {
