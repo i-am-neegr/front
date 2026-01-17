@@ -125,7 +125,7 @@
     }
 
     function connectWebSocket() {
-        const socket = new SockJS(`${backend}/ws`);
+        const socket = new SockJS(`${backend}`);
         stompClient = Stomp.over(socket);
 
         stompClient.connect({}, function () {
