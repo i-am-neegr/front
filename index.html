@@ -3,35 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Sudoku Telegram</title>
+    <title>Sudoku Multiplayer</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
     <style>
-        :root {
-            --bg: #f8f9fa;
-            --cell: #fff;
-            --filled: #e9ecef;
-            --border: #dee2e6;
-            --thick: #495057;
-            --accent: #0d6efd;
-            --error: #dc3545;
-            --text: #212529;
-        }
-
         body {
             margin: 0;
             padding: 16px;
-            font-family: system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text);
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #f8f9fa;
+            color: #212529;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
         }
 
-        h2 { margin: 8px 0 16px; font-size: 1.5rem; }
+        h2 {
+            margin: 8px 0 16px;
+            font-size: 1.6rem;
+        }
 
         .controls {
             display: flex;
@@ -42,30 +34,37 @@
         }
 
         select, button {
-            padding: 10px 16px;
+            padding: 10px 18px;
             font-size: 1rem;
             border-radius: 8px;
-            border: 1px solid var(--border);
+            border: 1px solid #dee2e6;
             background: white;
             cursor: pointer;
         }
 
         button {
-            background: var(--accent);
+            background: #0d6efd;
             color: white;
             border: none;
         }
 
-        button:hover:not(:disabled) { background: #0a58ca; }
+        button:hover:not(:disabled) {
+            background: #0a58ca;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
 
         #status {
             font-size: 1.1rem;
             margin: 12px 0;
             text-align: center;
-            min-height: 1.4em;
+            min-height: 1.5em;
         }
 
-        #players-list {
+        #players {
             font-size: 0.95rem;
             color: #6c757d;
             margin: 8px 0 16px;
@@ -77,48 +76,48 @@
             gap: 2px;
             width: 360px;
             max-width: 100%;
-            background: var(--thick);
+            background: #495057;
             padding: 2px;
             border-radius: 8px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.1);
         }
 
         .cell {
             aspect-ratio: 1;
-            background: var(--cell);
-            border: 1px solid var(--border);
-            font-size: 1.35rem;
+            background: white;
+            border: 1px solid #dee2e6;
+            font-size: 1.4rem;
             font-weight: bold;
             text-align: center;
-            color: var(--accent);
+            color: #0d6efd;
         }
 
         .cell.filled {
-            background: var(--filled);
+            background: #e9ecef;
             color: #495057;
             pointer-events: none;
         }
 
         .cell.error {
             background: #ffebee;
-            animation: shake 0.35s;
+            animation: shake 0.4s;
         }
 
         @keyframes shake {
-            0%,100% { transform: translateX(0); }
-            20%,80% { transform: translateX(-3px); }
-            40%,60% { transform: translateX(3px); }
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
         }
 
         /* 3×3 блоки */
-        .cell[data-row="0"], .cell[data-row="3"], .cell[data-row="6"] { border-top: 3px solid var(--thick); }
-        .cell[data-col="0"], .cell[data-col="3"], .cell[data-col="6"] { border-left: 3px solid var(--thick); }
-        .cell[data-row="8"] { border-bottom: 3px solid var(--thick); }
-        .cell[data-col="8"] { border-right: 3px solid var(--thick); }
+        .cell[data-row="0"], .cell[data-row="3"], .cell[data-row="6"] { border-top: 3px solid #495057; }
+        .cell[data-col="0"], .cell[data-col="3"], .cell[data-col="6"] { border-left: 3px solid #495057; }
+        .cell[data-row="8"] { border-bottom: 3px solid #495057; }
+        .cell[data-col="8"] { border-right: 3px solid #495057; }
 
         @media (max-width: 400px) {
             #board { width: 100%; gap: 1px; }
-            .cell { font-size: 1.1rem; }
+            .cell { font-size: 1.15rem; }
         }
     </style>
 </head>
@@ -132,88 +131,93 @@
         <option value="medium" selected>Средний</option>
         <option value="hard">Сложный</option>
     </select>
-    <button id="create">Создать</button>
+    <button id="create">Создать игру</button>
     <button id="share" style="display:none;">Поделиться</button>
 </div>
 
-<div id="status">Загрузка…</div>
-<div id="players-list"></div>
+<div id="status">Ожидание...</div>
+<div id="players"></div>
+
 <div id="board"></div>
-<button id="pass" style="display:none; margin-top:16px;">Пропустить ход</button>
+
+<button id="pass" style="display:none; margin-top: 20px;">Пропустить ход</button>
 
 <script>
     const tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
 
-    const WS_URL = 'https://sudoku-2ofn.onrender.com';               // ← твой домен
-    const BOT_USERNAME = 'sudoku52bot';                  // ← без @
-    const REST_BASE = 'https://sudoku-2ofn.onrender.com/api/sudoku';    // ← твой домен
+    const WS_URL = 'https://sudoku-2ofn.onrender.com';           // ← замени на свой
+    const REST_URL = 'https://sudoku-2ofn.onrender.com/api/sudoku'; // ← замени на свой
+    const BOT_USERNAME = 'sudoku52bot';                        // ← имя бота без @
 
     const user = tg.initDataUnsafe.user || {};
-    const userId = user.id?.toString() || 'guest_'+Date.now();
+    const userId = user.id?.toString() || ('guest_' + Date.now());
     const userName = user.username || user.first_name || 'Игрок';
-    const initDataRaw = tg.initData;
 
     let sessionId = null;
     let stompClient = null;
     let polling = null;
 
     // Автоприсоединение по startapp
-    const urlParams = new URLSearchParams(location.search);
-    if (urlParams.has('startapp')) {
-        sessionId = urlParams.get('startapp');
-        connectWebSocket(() => joinSession());
+    const params = new URLSearchParams(location.search);
+    if (params.has('startapp')) {
+        sessionId = params.get('startapp');
+        connectWS(() => join());
     }
 
     // ─── WebSocket ───────────────────────────────────────
 
-    function connectWebSocket(callback) {
+    function connectWS(callback) {
+        if (stompClient?.connected) {
+            if (callback) callback();
+            return;
+        }
+
         const socket = new SockJS(WS_URL);
         stompClient = Stomp.over(socket);
 
-        stompClient.connect({}, () => {
-            console.log('WS connected');
+        stompClient.connect({}, frame => {
+            console.log('WebSocket connected');
 
-            // Приватные подписки
+            // Приватный канал для создателя / присоединившегося
             stompClient.subscribe('/user/topic/session', msg => {
                 const data = JSON.parse(msg.body);
                 sessionId = data.sessionId;
                 updateUI(data);
-                showControls();
-                startPolling(); // на всякий случай
+                showButtons();
+                startPolling();
             });
 
-            // Общие обновления сессии
+            // Общие обновления
             if (sessionId) {
                 stompClient.subscribe('/topic/' + sessionId + '/players', msg => {
-                    const data = JSON.parse(msg.body);
-                    renderPlayers(data.players);
+                    const { players } = JSON.parse(msg.body);
+                    renderPlayers(players);
                     updateStatus();
                 });
 
                 stompClient.subscribe('/topic/' + sessionId + '/board', msg => {
-                    const data = JSON.parse(msg.body);
-                    renderBoard(data.board);
-                    updateStatusFromIndex(data.currentTurnIndex);
+                    const { board, currentTurnIndex } = JSON.parse(msg.body);
+                    renderBoard(board);
+                    updateStatusFromIndex(currentTurnIndex);
                 });
 
                 stompClient.subscribe('/topic/' + sessionId + '/turn', msg => {
-                    const data = JSON.parse(msg.body);
-                    updateStatusFromIndex(data.currentTurnIndex);
+                    const { currentTurnIndex } = JSON.parse(msg.body);
+                    updateStatusFromIndex(currentTurnIndex);
                 });
 
-                stompClient.subscribe('/topic/' + sessionId + '/finish', msg => {
-                    const data = JSON.parse(msg.body);
-                    document.getElementById('status').textContent = data.message || 'Игра завершена!';
-                    tg.showAlert(data.message || 'Судоку решено!');
+                stompClient.subscribe('/topic/' + sessionId + '/finish', () => {
+                    document.getElementById('status').textContent = 'Игра завершена! Судоку решено!';
+                    tg.showAlert('Судоку решено!');
                 });
             }
 
             if (callback) callback();
         }, err => {
-            console.error('WS error', err);
-            tg.showPopup({message: 'Ошибка соединения'});
+            console.error('WS error:', err);
+            tg.showPopup({ message: 'Ошибка соединения с сервером' });
         });
     }
 
@@ -221,7 +225,7 @@
 
     document.getElementById('create').onclick = () => {
         const diff = document.getElementById('difficulty').value;
-        connectWebSocket(() => {
+        connectWS(() => {
             stompClient.send('/app/create', {}, JSON.stringify({
                 difficulty: diff,
                 userId,
@@ -230,8 +234,8 @@
         });
     };
 
-    function joinSession() {
-        connectWebSocket(() => {
+    function join() {
+        connectWS(() => {
             stompClient.send('/app/join', {}, JSON.stringify({
                 sessionId,
                 userId,
@@ -243,40 +247,42 @@
     document.getElementById('share').onclick = () => {
         const link = `https://t.me/${BOT_USERNAME}/app?startapp=${sessionId}`;
         navigator.clipboard.writeText(link).then(() => {
-            tg.showPopup({message: 'Ссылка скопирована'});
+            tg.showPopup({ message: 'Ссылка скопирована в буфер' });
         }).catch(() => {
-            tg.showPopup({message: link});
+            tg.showPopup({ message: link });
         });
     };
 
     document.getElementById('pass').onclick = () => {
-        if (!stompClient) return;
-        stompClient.send('/app/pass', {}, JSON.stringify({ sessionId, userId }));
+        if (stompClient?.connected) {
+            stompClient.send('/app/pass', {}, JSON.stringify({ sessionId, userId }));
+        }
     };
 
-    // ─── Polling как запасной вариант ───────────────────
+    // ─── Polling (запасной канал) ───────────────────────
 
     function startPolling() {
         if (polling) clearInterval(polling);
-        polling = setInterval(async () => {
+        polling = setInterval(() => {
             if (!sessionId) return;
-            try {
-                const url = `${REST_BASE}/${sessionId}?initData=${encodeURIComponent(initDataRaw)}`;
-                const res = await fetch(url);
-                if (!res.ok) throw new Error('poll failed');
-                const data = await res.json();
-                renderBoard(data.board);
-                renderPlayers(data.players);
-                updateStatusFromIndex(data.currentTurnIndex);
-                if (data.finished) {
-                    clearInterval(polling);
-                    tg.showAlert('Игра завершена!');
-                }
-            } catch {}
+            fetch(`${REST_URL}/${sessionId}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    if (data) {
+                        renderBoard(data.board);
+                        renderPlayers(data.players);
+                        updateStatusFromIndex(data.currentTurnIndex);
+                        if (data.finished) {
+                            clearInterval(polling);
+                            tg.showAlert('Игра завершена!');
+                        }
+                    }
+                })
+                .catch(() => {});
         }, 4000);
     }
 
-    // ─── UI обновления ──────────────────────────────────
+    // ─── UI ─────────────────────────────────────────────
 
     function updateUI(data) {
         sessionId = data.sessionId;
@@ -286,8 +292,8 @@
     }
 
     function renderBoard(board) {
-        const container = document.getElementById('board');
-        container.innerHTML = '';
+        const el = document.getElementById('board');
+        el.innerHTML = '';
         board.forEach((row, r) => {
             row.forEach((val, c) => {
                 const input = document.createElement('input');
@@ -301,53 +307,41 @@
                     input.classList.add('filled');
                     input.disabled = true;
                 } else {
-                    input.oninput = e => handleInput(e, r, c);
+                    input.oninput = e => {
+                        const v = e.target.value.trim();
+                        if (!/[1-9]/.test(v)) {
+                            e.target.value = '';
+                            return;
+                        }
+                        const num = +v;
+                        if (stompClient?.connected) {
+                            stompClient.send('/app/move', {}, JSON.stringify({
+                                sessionId,
+                                userId,
+                                row: r,
+                                col: c,
+                                value: num
+                            }));
+                            e.target.value = ''; // очистим сразу
+                        }
+                    };
                 }
 
-                container.appendChild(input);
+                el.appendChild(input);
             });
         });
     }
 
-    async function handleInput(e, row, col) {
-        const v = e.target.value.trim();
-        if (!/[1-9]/.test(v)) {
-            e.target.value = '';
-            return;
-        }
-
-        if (!stompClient?.connected) {
-            e.target.value = '';
-            return;
-        }
-
-        const num = +v;
-
-        stompClient.send('/app/move', {}, JSON.stringify({
-            sessionId,
-            userId,
-            row,
-            col,
-            value: num
-        }));
-
-        // Очистим поле сразу — бэкенд подтвердит ход
-        e.target.value = '';
-    }
-
     function renderPlayers(players = []) {
-        document.getElementById('players-list').textContent =
+        document.getElementById('players').textContent =
             players.length ? `Игроки: ${players.map(p => p.name).join(', ')}` : '';
     }
 
     function updateStatusFromIndex(idx) {
-        if (!sessionId) return;
-        // Точный статус лучше получать через polling или доп. сообщение
-        // Здесь упрощённо
-        document.getElementById('status').textContent = `Ход игрока #${idx + 1}`;
+        document.getElementById('status').textContent = `Ход игрока ${idx + 1}`;
     }
 
-    function showControls() {
+    function showButtons() {
         document.getElementById('share').style.display = 'inline-block';
         document.getElementById('pass').style.display = 'inline-block';
     }
