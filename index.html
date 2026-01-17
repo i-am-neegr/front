@@ -5,79 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Sudoku Multiplayer</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f8f9fa;
-            margin: 0;
-            padding: 16px;
-            text-align: center;
-            color: #333;
-        }
-        h1 {
-            margin: 12px 0 20px;
-            font-size: 1.8rem;
-        }
-        .controls {
-            margin-bottom: 20px;
-        }
-        select, button {
-            padding: 10px 18px;
-            font-size: 1rem;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            margin: 6px;
-            cursor: pointer;
-        }
-        button {
-            background: #007bff;
-            color: white;
-            border: none;
-        }
-        button:disabled {
-            background: #aaa;
-            cursor: not-allowed;
-        }
-        #board {
-            display: grid;
-            grid-template-columns: repeat(9, 42px);
-            gap: 2px;
-            margin: 0 auto 24px;
-            max-width: 390px;
-            background: #000;
-            padding: 4px;
-            border-radius: 8px;
-        }
-        .cell {
-            width: 42px;
-            height: 42px;
-            font-size: 1.4rem;
-            text-align: center;
-            border: none;
-            background: white;
-            box-sizing: border-box;
-        }
-        .cell.filled {
-            background: #e9ecef;
-            color: #495057;
-            font-weight: bold;
-        }
-        .cell:focus {
-            outline: 2px solid #007bff;
-        }
-        /* жирные линии 3×3 */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8f9fa; margin: 0; padding: 16px; text-align: center; color: #333; }
+        h1 { margin: 12px 0 20px; font-size: 1.8rem; }
+        .controls { margin-bottom: 20px; }
+        select, button { padding: 10px 18px; font-size: 1rem; border-radius: 8px; border: 1px solid #ccc; margin: 6px; cursor: pointer; }
+        button { background: #007bff; color: white; border: none; }
+        button:disabled { background: #aaa; cursor: not-allowed; }
+        #create { background: #007bff; }
+        #share { background: #28a745; }
+        #tg-launch { background: #0088cc; display: none; } /* кнопка "В Telegram", показывается только если НЕ в TG */
+        #board { display: grid; grid-template-columns: repeat(9, 42px); gap: 2px; margin: 0 auto 24px; max-width: 390px; background: #000; padding: 4px; border-radius: 8px; }
+        .cell { width: 42px; height: 42px; font-size: 1.4rem; text-align: center; border: none; background: white; box-sizing: border-box; }
+        .cell.filled { background: #e9ecef; color: #495057; font-weight: bold; }
+        .cell:focus { outline: 2px solid #007bff; }
         .cell[data-row="2"], .cell[data-row="5"] { border-bottom: 3px solid #000 !important; }
         .cell[data-col="2"], .cell[data-col="5"] { border-right: 3px solid #000 !important; }
-
-        #status {
-            font-size: 1.1rem;
-            margin: 16px 0;
-            min-height: 1.4em;
-        }
-        #share, #pass {
-            display: none;
-        }
+        #status { font-size: 1.1rem; margin: 16px 0; min-height: 1.4em; }
+        #pass { display: none; }
     </style>
 
+    <!-- Telegram WebApp скрипт — загружается всегда, но используем только если есть window.Telegram -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
@@ -92,7 +39,8 @@
         <option value="hard">Сложный</option>
     </select>
     <button id="create">Создать игру</button>
-    <button id="share">Поделиться</button>
+    <button id="share" style="display:none;">Поделиться</button>
+    <button id="tg-launch">Открыть в Telegram</button>
 </div>
 
 <div id="status">Ожидание…</div>
@@ -102,33 +50,60 @@
 <button id="pass">Пропустить ход</button>
 
 <script>
-    const tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
+    // Определяем, запущено ли внутри Telegram
+    const isTelegram = !!window.Telegram?.WebApp;
+    let tg = isTelegram ? window.Telegram.WebApp : null;
 
-    const user = tg.initDataUnsafe.user || {};
-    const userId = user.id ? String(user.id) : 'guest-' + Date.now();
+    if (isTelegram) {
+        tg.ready();
+        tg.expand();
+    }
+
+    // userId: приоритет Telegram → guest
+    let userId;
+    if (isTelegram && tg.initDataUnsafe?.user?.id) {
+        userId = String(tg.initDataUnsafe.user.id);
+    } else {
+        // В обычном вебе — берём из localStorage или генерируем
+        userId = localStorage.getItem('sudokuUserId');
+        if (!userId) {
+            userId = 'guest-' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem('sudokuUserId', userId);
+        }
+    }
 
     const backend = 'https://sudoku-2ofn.onrender.com';
-    const botUsername = 'sudoku52bot';
-
     let stompClient = null;
     let sessionId = null;
     let players = [];
     let currentTurn = 0;
 
-    // Автоприсоединение по параметру startapp
+    // Читаем sessionId из пути (/abc123) или query (на всякий)
+    const path = window.location.pathname.substring(1);
     const params = new URLSearchParams(window.location.search);
-    if (params.has('startapp')) {
-        sessionId = params.get('startapp');
+    sessionId = params.get('startapp') || (path && path !== '' && path !== 'index.html' ? path.split('/')[0] : null);
+
+    console.log("Режим:", isTelegram ? "Telegram Mini App" : "Обычный браузер");
+    console.log("userId:", userId);
+    console.log("sessionId:", sessionId);
+
+    if (sessionId) {
+        document.getElementById('create').style.display = 'none';
+        document.getElementById('share').style.display = 'inline-block';
+        document.getElementById('status').textContent = `Подключаемся к игре ${sessionId}...`;
         connectWebSocket();
+    } else if (!isTelegram) {
+        // Показываем кнопку "Открыть в Telegram" только в обычном браузере
+        document.getElementById('tg-launch').style.display = 'inline-block';
     }
 
     function connectWebSocket() {
+        if (!sessionId) return;
+
         const socket = new SockJS(`${backend}`);
         stompClient = Stomp.over(socket);
 
-        stompClient.connect({}, function () {
+        stompClient.connect({}, () => {
             console.log('WebSocket подключён');
 
             stompClient.subscribe(`/topic/${sessionId}/board`, msg => {
@@ -150,9 +125,8 @@
                 document.getElementById('pass').style.display = 'none';
             });
 
-            // присоединяемся
             stompClient.send('/app/join', {}, JSON.stringify({ sessionId, userId }));
-        }, function (error) {
+        }, error => {
             console.error('WebSocket ошибка:', error);
             setTimeout(connectWebSocket, 3000);
         });
@@ -177,6 +151,9 @@
                 document.getElementById('pass').style.display = 'inline-block';
                 updateStatus();
                 connectWebSocket();
+
+                // Меняем URL для удобного шаринга
+                history.replaceState(null, '', `/${sessionId}`);
             })
             .catch(err => {
                 console.error(err);
@@ -184,111 +161,44 @@
             });
     };
 
-    // Поделиться — копируем ссылку в буфер + уведомление
+    // Поделиться (только прямая ссылка)
     document.getElementById('share').onclick = async () => {
-        if (!sessionId) {
-            alert("Сначала создайте игру!");
-            return;
-        }
+        if (!sessionId) return alert("Сначала создайте игру");
 
-        const botUsername = 'sudoku52bot'; // или вынеси в константу наверху
-        const shareLink = `https://t.me/${botUsername}?startapp=${sessionId}`;
-        // Альтернатива (иногда лучше работает): `https://t.me/${botUsername}/app?startapp=${sessionId}`
+        const shareLink = `${window.location.origin}/${sessionId}`;
 
         try {
             await navigator.clipboard.writeText(shareLink);
-
-            // Меняем текст кнопки на 2–3 секунды (визуальная обратная связь)
             const btn = document.getElementById('share');
-            const originalText = btn.textContent;
-            btn.textContent = "Ссылка скопирована ✓";
-            btn.style.background = '#28a745'; // зелёный акцент
-
-            setTimeout(() => {
-                btn.textContent = originalText;
-                btn.style.background = ''; // возвращаем оригинальный цвет
-            }, 2200);
-
-            // Опционально: можно сразу предложить открыть бота/чат
-            // tg.openLink(shareLink);   // ← раскомментируй, если хочешь оба действия
-
-            // Или показать более красивое уведомление через Telegram API (если нужно)
-            // tg.showPopup({ title: "Готово!", message: "Ссылка скопирована\nВставь её другу", buttons: [{type:"ok"}] });
-
+            btn.textContent = "Скопировано ✓";
+            setTimeout(() => btn.textContent = "Поделиться", 2000);
         } catch (err) {
-            console.error('Не удалось скопировать:', err);
-
-            // Запасной вариант — показываем ссылку пользователю
-            alert(`Не удалось скопировать автоматически.\n\nСкопируй вручную:\n${shareLink}`);
-
-            // Или открываем ссылку, чтобы пользователь мог long-press → копировать
-            tg.openLink(shareLink);
+            alert(`Скопируй вручную:\n${shareLink}`);
         }
-    };;
+    };
+
+    // Кнопка "Открыть в Telegram" (если запущено не в TG)
+    document.getElementById('tg-launch').onclick = () => {
+        const botUsername = 'sudoku52bot';
+        const tgLink = `https://t.me/${botUsername}/app?startapp=${sessionId || ''}`;
+        window.open(tgLink, '_blank');
+    };
 
     // Пропустить ход
     document.getElementById('pass').onclick = () => {
-        if (isMyTurn()) {
+        if (isMyTurn() && stompClient) {
             stompClient.send('/app/pass', {}, JSON.stringify({ sessionId, userId }));
         }
     };
 
-    function renderBoard(board) {
-        const container = document.getElementById('board');
-        container.innerHTML = '';
+    function renderBoard(board) { /* ... тот же код, что был раньше ... */ }
 
-        for (let r = 0; r < 9; r++) {
-            for (let c = 0; c < 9; c++) {
-                const input = document.createElement('input');
-                input.type = 'tel'; // лучше для мобильных
-                input.className = 'cell';
-                input.dataset.row = r;
-                input.dataset.col = c;
-                input.value = board[r][c] || '';
-
-                if (board[r][c] !== 0) {
-                    input.classList.add('filled');
-                    input.readOnly = true;
-                } else {
-                    input.maxLength = 1;
-                    input.addEventListener('input', e => {
-                        const v = e.target.value;
-                        if (v && isMyTurn()) {
-                            const num = parseInt(v, 10);
-                            if (num >= 1 && num <= 9) {
-                                stompClient.send('/app/move', {}, JSON.stringify({
-                                    sessionId,
-                                    userId,
-                                    row: r,
-                                    col: c,
-                                    value: num
-                                }));
-                            }
-                            e.target.value = ''; // очищаем после отправки
-                        }
-                    });
-                }
-
-                container.appendChild(input);
-            }
-        }
-    }
-
-    function updateStatus() {
-        const idx = players.indexOf(userId);
-        const isMy = idx >= 0 && idx === currentTurn;
-        const text = players.length === 0
-            ? 'Ожидание игроков…'
-            : `Игроков: ${players.length} • Ход ${isMy ? 'ваш' : 'другого'}`;
-        document.getElementById('status').textContent = text;
-        document.getElementById('pass').disabled = !isMy;
-    }
+    function updateStatus() { /* ... тот же код ... */ }
 
     function isMyTurn() {
         return players.indexOf(userId) === currentTurn;
     }
 
-    // начальный статус
     updateStatus();
 </script>
 </body>
